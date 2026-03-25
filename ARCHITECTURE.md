@@ -1,42 +1,36 @@
 # 🏗️ Technical Architecture
 
-## 1. Clean Architecture Pattern
+## 1. Domain-Driven Design
 
-The system follows the **Clean Architecture** (Onion Architecture) pattern to ensure high maintainability and testability.
-
-### Layers:
-- **Domain Layer**: Contains core entities (Ticket, User, SLA), Enums, and Domain logic. It has zero dependencies on other layers.
-- **Application Layer**: Contains Business Logic, Services, DTOs, and CQRS patterns (MediatR).
-- **Infrastructure Layer**: Implements external concerns like Database Access (EF Core), File Storage (Azure Blob), and AI Clients.
-- **API Layer**: The entry point (Controllers) handling HTTP requests, JWT validation, and Swagger documentation.
+The system is organized around core financial domains:
+- **User Management**: Authentication and profile handling.
+- **Transaction Engine**: Processing income and expense records.
+- **Budgeting System**: Category-based budget tracking and threshold monitoring.
+- **AI Insights**: Intelligent analysis of financial patterns.
 
 ## 2. AI Integration Strategy
 
-We use a **Prompt Engineering** approach with LLMs (GPT-4 or Gemini) to process unstructured ticket data.
+We utilize **Gemini 3 Flash** for real-time financial advisory.
+- **Client-Side Generation**: AI calls are made from the frontend to leverage platform-managed API keys securely.
+- **Contextual Analysis**: The model receives a snapshot of user transactions and budgets to provide personalized advice.
+- **Structured Output**: Using JSON schemas to ensure AI responses are consistently formatted for the UI.
 
-- **Classification**: LLM analyzes text to return a structured JSON object containing Category, Priority, and Department.
-- **Summarization**: Generates a one-sentence "TL;DR" for quick agent scanning.
-- **Sentiment Analysis**: Detects customer frustration levels to prioritize "Negative" sentiment tickets.
-- **Semantic Search**: (Planned) Uses Vector Embeddings to detect duplicate tickets before they are created.
+## 3. Security & Authentication
 
-## 3. Notification System
+- **JWT (JSON Web Tokens)**: Stateless authentication using a stable server-side secret.
+- **Protected Routes**: React context-based routing to prevent unauthorized access to financial data.
+- **Sensitive Data Isolation**: Financial records are strictly scoped to the authenticated user ID.
 
-The `NotificationService` is designed as a decoupled component that can be swapped between SMTP, SendGrid, or Azure Email Service.
+## 4. Notification System
 
-### Key Events:
-- `OnTicketCreated`: Notifies Customer (Confirmation) and Admin (Alert).
-- `OnAssignment`: Notifies Agent (New Task).
-- `OnSLABreach`: Notifies Admin (Escalation).
+The `NotificationService` handles automated alerts:
+- **Budget Breach**: Triggered when spending exceeds the set limit.
+- **Warning Threshold**: Triggered when spending reaches 80% of a budget.
+- **Simulated Email**: Logs alerts to the server console and persistent notification logs.
 
-## 4. Database Design
+## 5. Data Flow
 
-The schema is normalized to **3rd Normal Form (3NF)** to ensure data integrity.
-- **Audit Logging**: Every ticket change is tracked in `TicketHistory`.
-- **SLA Config**: Dynamic rules that can be adjusted without code changes.
-- **Indexing**: Optimized for common queries (Status, Priority, CustomerId).
-
-## 5. Scalability
-
-- **Stateless API**: Allows horizontal scaling behind a Load Balancer.
-- **Background Jobs**: Email sending and SLA checks are handled by background workers (Azure Functions) to prevent blocking the main request thread.
-- **Caching**: (Optional) Redis caching for frequently accessed dashboard stats.
+1. **User Action**: User adds a transaction or sets a budget.
+2. **Backend Update**: Data is stored in the in-memory repository.
+3. **Real-time Sync**: Dashboard views refresh to reflect the latest state.
+4. **AI Analysis**: User triggers insight generation; frontend fetches data, calls Gemini, and saves results to the backend.
