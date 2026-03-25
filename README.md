@@ -34,7 +34,7 @@ An enterprise-grade financial management system with AI-driven spending insights
 
 | Role | Email | Password |
 |------|-------|----------|
-| **User** | `mishrahitesh90616@gmail.com` | `password123` |
+| **User** | `demo123@gmail.com` | `password123` |
 
 ## 📂 Project Structure
 
