@@ -1,392 +1,287 @@
-import express from "express";
-import path from "path";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+import express from "express";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { fileURLToPath } from "url";
 
-// --- Configuration & Constants ---
-const PORT = 3000;
-const JWT_SECRET = process.env.JWT_SECRET || "nexus-ai-secret-key-2026";
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// --- Types & Interfaces ---
-interface User {
+// --- Types & Interfaces (Clean Architecture) ---
+
+export type Role = "User" | "Admin";
+
+export interface User {
   id: string;
   fullName: string;
   email: string;
   passwordHash: string;
-  role: "Admin" | "Agent" | "Customer";
-  departmentId?: number;
-}
-
-interface Ticket {
-  id: string;
-  title: string;
-  description: string;
-  status: "Open" | "InProgress" | "Resolved" | "Closed";
-  priority: "Low" | "Medium" | "High" | "Critical";
-  category: string;
-  sentiment?: string;
-  summary?: string;
-  customerId: string;
-  customerName: string;
-  assignedAgentId?: string;
-  suggestedAgentId?: string; // AI Suggestion
-  departmentId?: number;
+  role: Role;
   createdAt: string;
-  updatedAt: string;
-  slaDueDate: string;
-  isEscalated: boolean;
 }
 
-interface Comment {
+export interface Transaction {
   id: string;
-  ticketId: string;
   userId: string;
-  userName: string;
-  content: string;
-  createdAt: string;
-  isInternal: boolean;
+  amount: number;
+  type: "Income" | "Expense";
+  category: string;
+  description: string;
+  date: string;
 }
 
-interface NotificationLog {
+export interface Budget {
+  id: string;
+  userId: string;
+  category: string;
+  amount: number;
+  period: "Monthly" | "Yearly";
+}
+
+export interface AIInsight {
+  id: string;
+  userId: string;
+  content: string;
+  type: "Recommendation" | "Alert" | "Strategy";
+  timestamp: string;
+}
+
+export interface NotificationLog {
   id: string;
   recipient: string;
   subject: string;
   content: string;
   timestamp: string;
-  type: string;
 }
 
 // --- In-Memory Repositories (Simulation) ---
-let users: User[] = [
-  { id: "admin_1", fullName: "System Admin", email: "admin@nexus.ai", passwordHash: bcrypt.hashSync("admin123", 10), role: "Admin" },
-  { id: "agent_1", fullName: "Hitesh Mishra", email: "agent@nexus.ai", passwordHash: bcrypt.hashSync("agent123", 10), role: "Agent", departmentId: 1 },
-  { id: "cust_1", fullName: "Alice Johnson", email: "alice@example.com", passwordHash: bcrypt.hashSync("cust123", 10), role: "Customer" }
-];
 
-let tickets: Ticket[] = [
-  {
-    id: "TIC-1001",
-    title: "Login page is crashing on Safari",
-    description: "When I try to login using Safari browser, the page goes blank and the console shows a JS error. This is critical for our users.",
-    status: "Open",
-    priority: "High",
-    category: "Bug",
-    sentiment: "Negative",
-    summary: "Safari-specific login crash causing blank page.",
-    customerId: "cust_1",
-    customerName: "Alice Johnson",
-    createdAt: new Date(Date.now() - 3600000).toISOString(),
-    updatedAt: new Date(Date.now() - 3600000).toISOString(),
-    slaDueDate: new Date(Date.now() + 7200000).toISOString(),
-    isEscalated: false
+let users: User[] = [
+  { 
+    id: "user_1", 
+    fullName: "Hitesh Mishra", 
+    email: "mishrahitesh90616@gmail.com", 
+    passwordHash: bcrypt.hashSync("password123", 10), 
+    role: "User", 
+    createdAt: new Date().toISOString() 
   }
 ];
 
-let comments: Comment[] = [];
+let transactions: Transaction[] = [
+  { id: "t1", userId: "user_1", amount: 5000, type: "Income", category: "Salary", description: "Monthly Salary", date: "2026-03-01T10:00:00Z" },
+  { id: "t2", userId: "user_1", amount: 1200, type: "Expense", category: "Rent", description: "Apartment Rent", date: "2026-03-02T10:00:00Z" },
+  { id: "t3", userId: "user_1", amount: 450, type: "Expense", category: "Dining", description: "Dinner with friends", date: "2026-03-05T20:00:00Z" },
+  { id: "t4", userId: "user_1", amount: 150, type: "Expense", category: "Transport", description: "Fuel", date: "2026-03-07T15:00:00Z" },
+  { id: "t5", userId: "user_1", amount: 300, type: "Expense", category: "Dining", description: "Weekend Brunch", date: "2026-03-10T11:00:00Z" },
+  { id: "t6", userId: "user_1", amount: 800, type: "Expense", category: "Shopping", description: "New Clothes", date: "2026-03-15T14:00:00Z" },
+  { id: "t7", userId: "user_1", amount: 200, type: "Expense", category: "Utilities", description: "Electricity Bill", date: "2026-03-18T09:00:00Z" },
+];
+
+let budgets: Budget[] = [
+  { id: "b1", userId: "user_1", category: "Dining", amount: 500, period: "Monthly" },
+  { id: "b2", userId: "user_1", category: "Shopping", amount: 1000, period: "Monthly" },
+  { id: "b3", userId: "user_1", category: "Transport", amount: 300, period: "Monthly" },
+];
+
+let aiInsights: AIInsight[] = [];
 let notificationLogs: NotificationLog[] = [];
 
-// --- Services ---
+// --- Services (Business Logic) ---
 
 class NotificationService {
-  static async sendEmail(recipient: string, subject: string, template: string, data: any = {}) {
-    const content = template.replace(/{{(\w+)}}/g, (_, key) => data[key] || "");
+  static async sendEmail(recipient: string, subject: string, content: string) {
     const log: NotificationLog = {
       id: Math.random().toString(36).substr(2, 9),
       recipient,
       subject,
       content,
-      timestamp: new Date().toISOString(),
-      type: "Email"
+      timestamp: new Date().toISOString()
     };
     notificationLogs.push(log);
     console.log(`[EMAIL SENT] To: ${recipient} | Subject: ${subject}`);
     return true;
   }
 
-  static async notifyStatusChange(ticket: Ticket, status: string) {
-    await this.sendEmail(ticket.customerId, `Ticket Status Updated: ${ticket.id}`, 
-      "Hello, your ticket '{{title}}' status has been updated to: {{status}}.", 
-      { title: ticket.title, status });
-  }
+  static async checkBudgetsAndNotify(userId: string) {
+    const userTransactions = transactions.filter(t => t.userId === userId);
+    const userBudgets = budgets.filter(b => b.userId === userId);
+    const user = users.find(u => u.id === userId);
+    if (!user) return;
 
-  static async notifyTicketCreated(ticket: Ticket, customer: User) {
-    // Notify Customer
-    await this.sendEmail(customer.email, `Ticket Created: ${ticket.id}`, 
-      "Hello {{name}}, your ticket '{{title}}' has been created. Status: {{status}}.", 
-      { name: customer.fullName, title: ticket.title, status: ticket.status });
-    
-    // Notify Admin
-    await this.sendEmail("admin@nexus.ai", `New Ticket Alert: ${ticket.id}`, 
-      "A new ticket '{{title}}' was created by {{customer}}. Priority: {{priority}}.", 
-      { title: ticket.title, customer: customer.fullName, priority: ticket.priority });
-  }
-
-  static async notifyAssignment(ticket: Ticket, agent: User) {
-    await this.sendEmail(agent.email, `Ticket Assigned: ${ticket.id}`, 
-      "Hello {{name}}, you have been assigned to ticket '{{title}}'.", 
-      { name: agent.fullName, title: ticket.title });
-  }
-
-  static async notifyEscalation(ticket: Ticket) {
-    await this.sendEmail("admin@nexus.ai", `SLA BREACH ESCALATION: ${ticket.id}`, 
-      "CRITICAL: Ticket '{{title}}' has breached SLA. Immediate action required.", 
-      { title: ticket.title });
-  }
-}
-
-class AIService {
-  static async analyzeTicket(title: string, description: string) {
-    try {
-      const availableAgents = users.filter(u => u.role === "Agent").map(u => ({ id: u.id, name: u.fullName }));
+    for (const budget of userBudgets) {
+      const spent = userTransactions
+        .filter(t => t.category === budget.category && t.type === "Expense")
+        .reduce((sum, t) => sum + t.amount, 0);
       
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Analyze this support ticket and provide classification in JSON format.
-        Title: ${title}
-        Description: ${description}
-        Available Agents: ${JSON.stringify(availableAgents)}
-        
-        Return:
-        - category: (Bug, Feature, Complaint, Question)
-        - priority: (Low, Medium, High, Critical)
-        - summary: (One sentence summary)
-        - department: (Engineering, Product, Billing, Support)
-        - sentiment: (Positive, Neutral, Negative)
-        - suggestedAgentId: (Pick the best agent ID from the list based on the ticket content)`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              category: { type: Type.STRING },
-              priority: { type: Type.STRING },
-              summary: { type: Type.STRING },
-              department: { type: Type.STRING },
-              sentiment: { type: Type.STRING },
-              suggestedAgentId: { type: Type.STRING }
-            },
-            required: ["category", "priority", "summary", "department", "sentiment", "suggestedAgentId"]
-          }
-        }
-      });
-      return JSON.parse(response.text || "{}");
-    } catch (error) {
-      console.error("AI Analysis Error:", error);
-      return null;
-    }
-  }
-
-  static async suggestReply(ticket: Ticket) {
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Generate a professional support response for this ticket.
-        Title: ${ticket.title}
-        Description: ${ticket.description}
-        Category: ${ticket.category}
-        Customer: ${ticket.customerName}
-        
-        The response should be empathetic, professional, and provide clear next steps.`,
-      });
-      return response.text;
-    } catch (error) {
-      console.error("AI Reply Error:", error);
-      return "I'm sorry, I couldn't generate a reply at this time.";
+      if (spent > budget.amount) {
+        await this.sendEmail(
+          user.email,
+          `Budget Exceeded: ${budget.category}`,
+          `Alert: You have spent $${spent} on ${budget.category}, which exceeds your budget of $${budget.amount}.`
+        );
+      } else if (spent > budget.amount * 0.8) {
+        await this.sendEmail(
+          user.email,
+          `Budget Warning: ${budget.category}`,
+          `Warning: You have spent $${spent} on ${budget.category}, reaching 80% of your $${budget.amount} budget.`
+        );
+      }
     }
   }
 }
 
-// --- Express Server Setup ---
+// --- Express App & Middleware ---
+
+const app = express();
+app.use(express.json());
+
+const JWT_SECRET = "enterprise_financial_advisor_secure_secret_2026";
+
+const authenticateToken = (req: any, res: any, next: any) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) {
+    console.log(`[AUTH] No token provided for ${req.url}`);
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+    if (err) {
+      console.error(`[AUTH] Token verification failed for ${req.url}:`, err.message);
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    req.user = user;
+    next();
+  });
+};
+
+// --- API Routes ---
+
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
+// Auth
+app.post("/api/auth/login", async (req, res) => {
+  console.log("Login attempt:", req.body.email);
+  const { email, password } = req.body;
+  const user = users.find(u => u.email === email);
+  if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
+    console.log("Login failed for:", email);
+    return res.status(401).json({ error: "Invalid credentials" });
+  }
+  const token = jwt.sign({ id: user.id, email: user.email, role: user.role, fullName: user.fullName }, JWT_SECRET);
+  console.log("Login successful for:", email);
+  res.json({ token, user: { id: user.id, email: user.email, role: user.role, fullName: user.fullName } });
+});
+
+// Transactions
+app.get("/api/transactions", authenticateToken, (req: any, res) => {
+  const userTransactions = transactions.filter(t => t.userId === req.user.id);
+  res.json(userTransactions);
+});
+
+app.post("/api/transactions", authenticateToken, async (req: any, res) => {
+  const { amount, type, category, description, date } = req.body;
+  const newTransaction: Transaction = {
+    id: Math.random().toString(36).substr(2, 9),
+    userId: req.user.id,
+    amount,
+    type,
+    category,
+    description,
+    date: date || new Date().toISOString()
+  };
+  transactions.push(newTransaction);
+  
+  // Trigger budget check
+  await NotificationService.checkBudgetsAndNotify(req.user.id);
+  
+  res.status(201).json(newTransaction);
+});
+
+// Budgets
+app.get("/api/budgets", authenticateToken, (req: any, res) => {
+  const userBudgets = budgets.filter(b => b.userId === req.user.id);
+  res.json(userBudgets);
+});
+
+app.post("/api/budgets", authenticateToken, (req: any, res) => {
+  const { category, amount, period } = req.body;
+  const newBudget: Budget = {
+    id: Math.random().toString(36).substr(2, 9),
+    userId: req.user.id,
+    category,
+    amount,
+    period
+  };
+  budgets.push(newBudget);
+  res.status(201).json(newBudget);
+});
+
+// AI Insights
+app.get("/api/insights", authenticateToken, (req: any, res) => {
+  const userInsights = aiInsights.filter(i => i.userId === req.user.id);
+  res.json(userInsights);
+});
+
+app.post("/api/insights", authenticateToken, (req: any, res) => {
+  const { insights } = req.body;
+  if (!Array.isArray(insights)) return res.status(400).json({ error: "Invalid insights" });
+  
+  const formattedInsights = insights.map((i: any) => ({
+    ...i,
+    id: Math.random().toString(36).substr(2, 9),
+    userId: req.user.id,
+    timestamp: new Date().toISOString()
+  }));
+  
+  aiInsights.push(...formattedInsights);
+  res.status(201).json(formattedInsights);
+});
+
+// Notifications
+app.get("/api/notifications", authenticateToken, (req: any, res) => {
+  // Only Admin or the user themselves (if we filtered by recipient email)
+  const logs = notificationLogs.filter(l => l.recipient === req.user.email);
+  res.json(logs);
+});
+
+// API 404 Handler
+app.use("/api/*", (req, res) => {
+  res.status(404).json({ error: `API route not found: ${req.originalUrl}` });
+});
+
+// --- Vite Integration ---
+
+import fs from "fs";
 
 async function startServer() {
-  const app = express();
-  app.use(express.json());
+  const isProduction = process.env.NODE_ENV === "production";
+  const distPath = path.join(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(distPath);
 
-  // --- Auth Middleware ---
-  const authenticateToken = (req: any, res: any, next: any) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1];
-    if (!token) return res.sendStatus(401);
-
-    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
-      if (err) return res.sendStatus(403);
-      req.user = user;
-      next();
-    });
-  };
-
-  // --- API Routes ---
-
-  // Auth
-  app.post("/api/auth/login", (req, res) => {
-    const { email, password } = req.body;
-    const user = users.find(u => u.email === email);
-    if (!user || !bcrypt.compareSync(password, user.passwordHash)) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-    const token = jwt.sign({ id: user.id, role: user.role, email: user.email, fullName: user.fullName }, JWT_SECRET);
-    res.json({ token, user: { id: user.id, fullName: user.fullName, email: user.email, role: user.role } });
-  });
-
-  // Tickets
-  app.get("/api/tickets", authenticateToken, (req: any, res) => {
-    if (req.user.role === "Customer") {
-      return res.json(tickets.filter(t => t.customerId === req.user.id));
-    }
-    if (req.user.role === "Agent") {
-      // Agents only see tickets assigned to them
-      return res.json(tickets.filter(t => t.assignedAgentId === req.user.id));
-    }
-    // Admins see everything
-    res.json(tickets);
-  });
-
-  app.get("/api/tickets/:id", authenticateToken, (req, res) => {
-    const ticket = tickets.find(t => t.id === req.params.id);
-    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
-    res.json(ticket);
-  });
-
-  app.post("/api/tickets", authenticateToken, async (req: any, res) => {
-    const { title, description } = req.body;
-    
-    // 1. AI Analysis
-    const analysis = await AIService.analyzeTicket(title, description);
-    
-    // 2. Create Ticket
-    const newTicket: Ticket = {
-      id: `TIC-${1000 + tickets.length + 1}`,
-      title,
-      description,
-      status: "Open",
-      priority: analysis?.priority || "Medium",
-      category: analysis?.category || "Question",
-      sentiment: analysis?.sentiment,
-      summary: analysis?.summary,
-      suggestedAgentId: analysis?.suggestedAgentId,
-      customerId: req.user.id,
-      customerName: req.user.fullName,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      slaDueDate: new Date(Date.now() + 24 * 3600000).toISOString(), // 24h SLA default
-      isEscalated: false
-    };
-    
-    tickets.push(newTicket);
-    
-    // 3. Notifications
-    await NotificationService.notifyTicketCreated(newTicket, req.user);
-    
-    res.status(201).json(newTicket);
-  });
-
-  app.get("/api/agents", authenticateToken, (req: any, res) => {
-    if (req.user.role !== "Admin") return res.sendStatus(403);
-    const agents = users.filter(u => u.role === "Agent").map(u => ({
-      id: u.id,
-      fullName: u.fullName,
-      email: u.email,
-      workload: tickets.filter(t => t.assignedAgentId === u.id && t.status !== "Closed").length
-    }));
-    res.json(agents);
-  });
-
-  app.post("/api/tickets/:id/resolve", authenticateToken, async (req: any, res) => {
-    const ticket = tickets.find(t => t.id === req.params.id);
-    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
-    
-    // Only Agent assigned or Admin can resolve
-    if (req.user.role === "Agent" && ticket.assignedAgentId !== req.user.id) {
-      return res.status(403).json({ error: "You are not assigned to this ticket" });
-    }
-    if (req.user.role === "Customer") {
-      return res.status(403).json({ error: "Customers cannot resolve tickets" });
-    }
-
-    ticket.status = "Resolved";
-    ticket.updatedAt = new Date().toISOString();
-    
-    await NotificationService.notifyStatusChange(ticket, "Resolved");
-    res.json(ticket);
-  });
-
-  app.post("/api/tickets/:id/comments", authenticateToken, async (req: any, res) => {
-    const ticket = tickets.find(t => t.id === req.params.id);
-    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
-    
-    const { content } = req.body;
-    if (!content) return res.status(400).json({ error: "Comment content is required" });
-
-    // In a real app, we'd have a comments table. Here we'll just log it and maybe update ticket
-    ticket.updatedAt = new Date().toISOString();
-    
-    // Simulate notification to the other party
-    const recipient = req.user.role === "Customer" ? "Agent" : "Customer";
-    await NotificationService.sendEmail(
-      recipient === "Agent" ? "support@nexus.ai" : ticket.customerId,
-      `New Comment on Ticket #${ticket.id}`,
-      `${req.user.fullName} added a comment: "${content}"`
-    );
-
-    res.json({ message: "Comment added successfully", timestamp: new Date().toISOString() });
-  });
-
-  app.post("/api/tickets/:id/suggest-reply", authenticateToken, async (req, res) => {
-    const ticket = tickets.find(t => t.id === req.params.id);
-    if (!ticket) return res.status(404).json({ error: "Ticket not found" });
-    
-    const reply = await AIService.suggestReply(ticket);
-    res.json({ reply });
-  });
-
-  // Notifications Log (For Demo)
-  app.get("/api/notifications", authenticateToken, (req, res) => {
-    res.json(notificationLogs);
-  });
-
-  // Analytics
-  app.get("/api/analytics", authenticateToken, (req, res) => {
-    res.json({
-      totalTickets: tickets.length + 153,
-      resolvedToday: 12,
-      avgResolutionTime: "4.2h",
-      slaCompliance: "94%",
-      trends: [
-        { name: "Mon", tickets: 20 },
-        { name: "Tue", tickets: 35 },
-        { name: "Wed", tickets: 25 },
-        { name: "Thu", tickets: 45 },
-        { name: "Fri", tickets: 30 }
-      ],
-      categoryDistribution: [
-        { name: "Bug", value: 45 },
-        { name: "Feature", value: 25 },
-        { name: "Billing", value: 20 },
-        { name: "Support", value: 10 }
-      ]
-    });
-  });
-
-  // --- Vite Middleware ---
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction || !hasDist) {
+    console.log("Starting in DEVELOPMENT mode (using Vite middleware)");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    console.log("Starting in PRODUCTION mode (serving static files)");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
+  const PORT = 3000;
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Enterprise Financial Advisor running at http://localhost:${PORT}`);
   });
 }
 
